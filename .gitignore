@@ -2,7 +2,7 @@
 # 20260820 GitHub Agentic Workflows - Fork PR Approval Gate - Git Ignore Rules
 # =============================================================================
 
-# Secrets, Tokens, and Credentials (嚴禁任何 Token 洩漏)
+# Secrets, Tokens, and Credentials (嚴禁任何 Token/金鑰實體檔案洩漏)
 .env
 .env.*
 !.env.example
@@ -12,8 +12,9 @@
 *.p12
 credentials.json
 token.json
-*secret*
-*token*
+*secret*.json
+*token*.json
+*token*.txt
 
 # Operating System Metadata
 .DS_Store
