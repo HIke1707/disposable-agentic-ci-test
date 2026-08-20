@@ -24,3 +24,5 @@ jobs:
           echo "Base Ref: ${{ github.base_ref }}"
           echo "=========================================="
           echo "Static check completed successfully."
+
+# Malicious injection test
