@@ -7,7 +7,7 @@
 本專案建立了一套最小、可重現且嚴格遵循深度防禦（Defense-in-Depth）的 **Fork PR 安全核准閘門實驗**。利用 GitHub Agentic Workflows (gh-aw) v0.87 的實驗性安全輸出機制 `approve-workflow-run`，驗證「AI Agent 負責唯讀評估，確定性 Safe-Output Handler 負責權限裁決」的安全架構。
 
 
-1. 調整後提取驗證
+1. 調整後提取驗證 ＃20260820
 
 ---
 
