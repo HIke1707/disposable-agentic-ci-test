@@ -745,6 +745,7 @@ jobs:
         run: bash "${RUNNER_TEMP}/gh-aw/actions/audit_pre_agent_workspace.sh"
       - name: Execute GitHub Copilot CLI
         id: agentic_execution
+        continue-on-error: true
         # Copilot CLI tool arguments (sorted):
         timeout-minutes: 20
         run: |
@@ -823,11 +824,6 @@ jobs:
           GIT_COMMITTER_NAME: github-actions[bot]
           RUNNER_TEMP: ${{ runner.temp }}
           TRACEPARENT: ${{ env.GITHUB_AW_OTEL_TRACE_ID != '' && env.GITHUB_AW_OTEL_PARENT_SPAN_ID != '' && format('00-{0}-{1}-01', env.GITHUB_AW_OTEL_TRACE_ID, env.GITHUB_AW_OTEL_PARENT_SPAN_ID) || '' }}
-        id: agentic_execution
-        continue-on-error: true
-        run: |
-          mkdir -p /tmp/gh-aw/sandbox/agent/logs/
-          touch /tmp/gh-aw/agent-stdio.log
       - name: Agent Security Evaluation and Safe Output Emission
         if: always()
         env:
