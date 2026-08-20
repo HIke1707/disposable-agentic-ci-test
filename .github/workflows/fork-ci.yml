@@ -1,0 +1,26 @@
+name: Fork Baseline CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  harmless-check:
+    name: Harmless Lint and Static Validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Perform Harmless Validation
+        run: |
+          echo "=========================================="
+          echo "Executing Baseline Fork PR CI Pipeline"
+          echo "PR Number: ${{ github.event.pull_request.number }}"
+          echo "Head Ref: ${{ github.head_ref }}"
+          echo "Base Ref: ${{ github.base_ref }}"
+          echo "=========================================="
+          echo "Static check completed successfully."

@@ -1,0 +1,21 @@
+name: Untrusted Fork CI (Non-Allowlisted)
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  untrusted-pipeline:
+    name: Non-Allowlisted Pipeline
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Untrusted Execution Notice
+        run: |
+          echo "This workflow is intentionally excluded from allowed-workflows in safe-outputs."
+          echo "It should be deterministically rejected by approve-workflow-run handler."
