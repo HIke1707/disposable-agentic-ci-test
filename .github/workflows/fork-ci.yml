@@ -26,3 +26,5 @@ jobs:
           echo "Static check completed successfully."
 
 # Malicious injection test
+
+# test protected file
