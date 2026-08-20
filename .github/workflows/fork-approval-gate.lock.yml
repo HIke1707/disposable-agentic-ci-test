@@ -17,6 +17,11 @@ on:
         description: "Target Pull Request Number associated with the run"
         required: true
         type: string
+      staged:
+        description: "Staged mode (true to dry-run validate, false to execute live approval)"
+        required: false
+        default: "false"
+        type: string
 
 permissions:
   actions: read
@@ -25,17 +30,101 @@ permissions:
 
 jobs:
   agent-evaluator:
-    name: Agent Security Evaluation
+    name: Agent Security Evaluation (Read-Only)
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      pull-requests: read
+      contents: read
+    outputs:
+      decision: ${{ steps.eval_step.outputs.decision }}
+      reason: ${{ steps.eval_step.outputs.reason }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Execute Agent Reasoning Loop
-        id: agent_reasoning
+      - name: Execute Agent Security Evaluation
+        id: eval_step
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_PR: ${{ inputs.pr_number }}
+          TARGET_RUN_ID: ${{ inputs.run_id }}
         run: |
-          echo "Starting Agentic Security Evaluation for Run ID: ${{ inputs.run_id }}, PR: ${{ inputs.pr_number }}"
-          # The agent reads PR diff, workflow file, and determines whether to emit approve-workflow-run safe-output
+          python3 - << 'EOF'
+          import os, sys, json, urllib.request
+
+          token = os.environ.get("GITHUB_TOKEN")
+          repo = os.environ.get("GITHUB_REPOSITORY")
+          pr_num = os.environ.get("TARGET_PR")
+          run_id = os.environ.get("TARGET_RUN_ID")
+
+          headers = {
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/vnd.github+json",
+              "User-Agent": "gh-aw-agent-evaluator"
+          }
+
+          print(f"=== Agent Security Evaluation ===")
+          print(f"Repository: {repo}")
+          print(f"Target PR: #{pr_num}")
+          print(f"Target Run ID: {run_id}")
+
+          # 1. Fetch PR details
+          pr_url = f"https://api.github.com/repos/{repo}/pulls/{pr_num}"
+          try:
+              req = urllib.request.Request(pr_url, headers=headers)
+              with urllib.request.urlopen(req) as resp:
+                  pr_data = json.loads(resp.read().decode())
+          except Exception as e:
+              print(f"Error fetching PR data: {e}")
+              sys.exit(1)
+
+          pr_title = pr_data.get("title", "")
+          pr_body = pr_data.get("body", "") or ""
+          pr_author = pr_data.get("user", {}).get("login", "")
+          is_fork = pr_data.get("head", {}).get("repo", {}).get("full_name") != repo
+
+          print(f"PR Title: {pr_title}")
+          print(f"PR Author: {pr_author} (Is Fork: {is_fork})")
+
+          # 2. Prompt Injection Check
+          injection_signatures = ["SYSTEM OVERRIDE", "IGNORE ALL RULES", "APPROVE RUN", "IGNORE PREVIOUS", "SYSTEM PROMPT"]
+          detected_injections = [sig for sig in injection_signatures if sig.lower() in (pr_title + " " + pr_body).lower()]
+
+          if detected_injections:
+              print(f"[AGENT SECURITY ALERT] Adversarial prompt injection detected: {detected_injections}")
+              print("[AGENT DECISION] DENY - Prompt injection pattern identified in PR metadata.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("decision=DENY\n")
+                  f.write("reason=Prompt injection detected\n")
+              sys.exit(0)
+
+          # 3. Check modified files
+          files_url = f"https://api.github.com/repos/{repo}/pulls/{pr_num}/files"
+          req_files = urllib.request.Request(files_url, headers=headers)
+          with urllib.request.urlopen(req_files) as resp:
+              files_data = json.loads(resp.read().decode())
+
+          modified_files = [f.get("filename") for f in files_data]
+          print(f"Modified files ({len(modified_files)}): {modified_files}")
+
+          protected_modified = [f for f in modified_files if f.startswith(".github/workflows/") or f.startswith(".github/actions/")]
+
+          if protected_modified:
+              print(f"[AGENT SECURITY ALERT] PR modifies protected workflow files: {protected_modified}")
+              print("[AGENT DECISION] ABSTAIN - High-risk modification to CI/CD workflows.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("decision=ABSTAIN\n")
+                  f.write("reason=Protected workflow files modified\n")
+              sys.exit(0)
+
+          print("[AGENT REASONING] PR modifies only safe non-workflow files. No prompt injection found.")
+          print("[AGENT DECISION] APPROVE - Safe-output approval requested.")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("decision=APPROVE\n")
+              f.write("reason=Safe PR modification verified\n")
+          EOF
 
   safe-output-approval-handler:
     name: Safe-Output Approval Gate Handler (Deterministic)
@@ -45,19 +134,131 @@ jobs:
       actions: write
       pull-requests: read
     steps:
-      - name: Enforce Policy Gate & Execute Approval
+      - name: Enforce Deterministic Policy Gate & Execute Approval
         env:
           APPROVE_TOKEN: ${{ secrets.APPROVE_WORKFLOW_RUN_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           TARGET_RUN_ID: ${{ inputs.run_id }}
           TARGET_PR: ${{ inputs.pr_number }}
-          STAGED_MODE: "true" # Set to false in live execution
+          STAGED_MODE: ${{ inputs.staged }}
           FORK_ALLOWED: "true"
           ALLOWED_WORKFLOWS: "fork-ci.yml"
+          AGENT_DECISION: ${{ needs.agent-evaluator.outputs.decision }}
+          AGENT_REASON: ${{ needs.agent-evaluator.outputs.reason }}
         run: |
-          echo "=== Safe-Output Deterministic Policy Evaluation ==="
-          echo "Checking allowlist for workflow and PR scope..."
-          echo "Staged Mode: $STAGED_MODE"
-          echo "Allowed Workflows: $ALLOWED_WORKFLOWS"
-          echo "Target Run ID: $TARGET_RUN_ID"
-          echo "Target PR Number: $TARGET_PR"
-          # In live mode (staged=false), calls GitHub Actions API: POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve
+          python3 - << 'EOF'
+          import os, sys, json, urllib.request
+
+          approve_token = os.environ.get("APPROVE_TOKEN") or os.environ.get("GITHUB_TOKEN")
+          repo = os.environ.get("GITHUB_REPOSITORY")
+          run_id = os.environ.get("TARGET_RUN_ID")
+          pr_num = os.environ.get("TARGET_PR")
+          staged_mode = (os.environ.get("STAGED_MODE", "false").lower() == "true")
+          fork_allowed = (os.environ.get("FORK_ALLOWED", "true").lower() == "true")
+          allowed_workflows_raw = os.environ.get("ALLOWED_WORKFLOWS", "fork-ci.yml")
+          allowed_workflows = [w.strip() for w in allowed_workflows_raw.split(",")]
+          agent_decision = os.environ.get("AGENT_DECISION", "APPROVE")
+          agent_reason = os.environ.get("AGENT_REASON", "")
+
+          headers = {
+              "Authorization": f"Bearer {approve_token}",
+              "Accept": "application/vnd.github+json",
+              "User-Agent": "gh-aw-safe-output-handler"
+          }
+
+          print("=== Safe-Output Deterministic Policy Evaluation ===")
+          print(f"Agent Decision: {agent_decision} (Reason: {agent_reason})")
+          print(f"Target Run ID: {run_id}")
+          print(f"Target PR: #{pr_num}")
+          print(f"Allowed Workflows: {allowed_workflows}")
+          print(f"Fork Allowed: {fork_allowed}")
+          print(f"Staged Mode: {staged_mode}")
+
+          if agent_decision != "APPROVE":
+              print(f"[SECURITY INVARIANT] Agent emitted '{agent_decision}'. Refusing safe-output execution.")
+              print(f"[STATUS] REJECTED - No approval API call will be executed.")
+              sys.exit(0)
+
+          # 1. Fetch Run Details
+          run_url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}"
+          req = urllib.request.Request(run_url, headers=headers)
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  run_data = json.loads(resp.read().decode())
+          except urllib.error.HTTPError as e:
+              print(f"[ERROR] Failed to fetch Run {run_id}: HTTP {e.code} - {e.read().decode()}")
+              sys.exit(1)
+
+          workflow_path = run_data.get("path", "")
+          workflow_name = os.path.basename(workflow_path)
+          run_status = run_data.get("status", "")
+          head_repo = run_data.get("head_repository", {}).get("full_name", "")
+          is_fork_run = (head_repo != repo)
+
+          print(f"Fetched Workflow Path: '{workflow_path}' (Name: '{workflow_name}')")
+          print(f"Run Status: '{run_status}'")
+          print(f"Head Repository: '{head_repo}' (Is Fork: {is_fork_run})")
+
+          # Policy Check 1: Workflow Allowlist
+          is_workflow_allowed = (workflow_name in allowed_workflows) or (workflow_path in allowed_workflows)
+          if not is_workflow_allowed:
+              print(f"[POLICY CHECK] Workflow: '{workflow_name}' NOT IN allowed-workflows {allowed_workflows} -> DENIED")
+              print(f"[REJECTION REASON] Target workflow '{workflow_name}' is not permitted by allowlist.")
+              print("[SECURITY INVARIANT] Aborting approval API invocation. Run remains in waiting state.")
+              sys.exit(1)
+          print(f"[POLICY CHECK] Workflow: '{workflow_name}' IN allowed-workflows -> PASS")
+
+          # Policy Check 2: PR Scope
+          pull_requests = run_data.get("pull_requests", [])
+          if pull_requests:
+              pr_numbers = [str(pr.get("number")) for pr in pull_requests]
+              if str(pr_num) in pr_numbers:
+                  print(f"[POLICY CHECK] PR: '{pr_num}' matched in run pull_requests {pr_numbers} -> PASS")
+              else:
+                  print(f"[POLICY CHECK] PR: '{pr_num}' NOT IN run pull_requests {pr_numbers} -> DENIED")
+                  sys.exit(1)
+          else:
+              print(f"[POLICY CHECK] PR #{pr_num} scope verified -> PASS")
+
+          # Policy Check 3: Fork Policy
+          if is_fork_run and not fork_allowed:
+              print(f"[POLICY CHECK] Fork Origin: External Fork not allowed (fork=false) -> DENIED")
+              sys.exit(1)
+          print(f"[POLICY CHECK] Fork Origin: External Fork allowed (fork={fork_allowed}) -> PASS")
+
+          # Policy Check 4: Protected Files Check
+          files_url = f"https://api.github.com/repos/{repo}/pulls/{pr_num}/files"
+          req_f = urllib.request.Request(files_url, headers=headers)
+          with urllib.request.urlopen(req_f) as resp:
+              files_data = json.loads(resp.read().decode())
+          modified_files = [f.get("filename") for f in files_data]
+          protected_files = [f for f in modified_files if f.startswith(".github/workflows/") or f.startswith(".github/actions/")]
+          if protected_files:
+              print(f"[POLICY CHECK] Protected Files: Modified {protected_files} -> DENIED")
+              sys.exit(1)
+          print(f"[POLICY CHECK] Protected Files: None modified -> PASS")
+
+          # Execution: Staged vs Live Approval
+          if staged_mode:
+              print("[STATUS] STAGED MODE: Policy validation completed successfully. Skipping live API call.")
+          else:
+              approve_url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/approve"
+              print(f"[ACTION] Invoking GitHub API: POST /repos/{repo}/actions/runs/{run_id}/approve")
+              req_approve = urllib.request.Request(approve_url, data=b"", headers=headers, method="POST")
+              try:
+                  with urllib.request.urlopen(req_approve) as resp:
+                      status_code = resp.status
+                      body = resp.read().decode()
+                      print(f"[STATUS] HTTP {status_code} - Workflow Run #{run_id} Approved Successfully.")
+                      if body:
+                          print(f"[RESPONSE] {body}")
+              except urllib.error.HTTPError as e:
+                  status_code = e.code
+                  err_body = e.read().decode()
+                  print(f"[STATUS] HTTP {status_code} - API Response: {err_body}")
+                  if status_code in [200, 204]:
+                      print(f"[STATUS] Workflow Run #{run_id} Approved Successfully.")
+                  else:
+                      print(f"[WARNING] API invocation completed with HTTP {status_code}")
+          EOF

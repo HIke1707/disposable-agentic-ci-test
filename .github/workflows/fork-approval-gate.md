@@ -13,6 +13,11 @@ on:
         description: "Target Pull Request Number associated with the run"
         required: true
         type: string
+      staged:
+        description: "Staged mode (true for dry-run validation, false for live execution)"
+        required: false
+        default: "false"
+        type: string
 
 permissions:
   actions: read
@@ -23,7 +28,7 @@ safe-outputs:
   approve-workflow-run:
     max: 1
     fork: true
-    staged: true
+    staged: false
     github-token: ${{ secrets.APPROVE_WORKFLOW_RUN_TOKEN }}
     allowed-workflows:
       - fork-ci.yml
