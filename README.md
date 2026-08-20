@@ -9,6 +9,8 @@
 
 1. 調整後提取驗證
 
+2. ## Verification v0.87.1 Native
+
 ---
 
 ## 🛡️ 安全實驗拓撲與威脅邊界 (Threat Boundaries)
