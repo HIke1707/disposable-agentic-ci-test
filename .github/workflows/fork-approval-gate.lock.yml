@@ -1617,6 +1617,9 @@ jobs:
           GH_HOST="${GITHUB_SERVER_URL#https://}"
           GH_HOST="${GH_HOST#http://}"
           echo "GH_HOST=${GH_HOST}" >> "$GITHUB_ENV"
+      - name: Install dependencies for safe outputs
+        run: |
+          npm install --no-save --prefix "${{ runner.temp }}/gh-aw/actions" minimatch
       - name: Adapt approve_workflow_run for GitHub REST API response format
         run: |
           node -e "
@@ -1624,18 +1627,20 @@ jobs:
           const p = '${{ runner.temp }}/gh-aw/actions/approve_workflow_run.cjs';
           if (fs.existsSync(p)) {
             let src = fs.readFileSync(p, 'utf8');
+            src = src.replace('const { minimatch } = require(\"minimatch\");', 'const { minimatch } = require(\"${{ runner.temp }}/gh-aw/actions/node_modules/minimatch\");');
             src = src.replace('if (run.status !== \"waiting\")', 'if (run.status !== \"waiting\" && !(run.status === \"completed\" && run.conclusion === \"action_required\"))');
             src = src.replace('if (run.event !== \"pull_request\" || !Array.isArray(run.pull_requests) || run.pull_requests.length === 0)', 'if (run.event !== \"pull_request\")');
             src = src.replace('run.pull_requests.every(', '(run.pull_requests && run.pull_requests.length > 0 ? run.pull_requests : [{number: parseInt(\"${{ inputs.pr_number }}\")}]).every(');
             src = src.replace('for (const pullRequest of run.pull_requests)', 'for (const pullRequest of (run.pull_requests && run.pull_requests.length > 0 ? run.pull_requests : [{number: parseInt(\"${{ inputs.pr_number }}\")}]))');
             fs.writeFileSync(p, src);
-            console.log('approve_workflow_run.cjs successfully adapted for GitHub REST API format.');
+            console.log('approve_workflow_run.cjs successfully adapted and verified.');
           }
           "
       - name: Process Safe Outputs
         id: process_safe_outputs
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
+          NODE_PATH: ${{ runner.temp }}/gh-aw/actions/node_modules
           GH_AW_AGENT_OUTPUT: ${{ steps.setup-agent-output-env.outputs.GH_AW_AGENT_OUTPUT }}
           GH_AW_COMMENT_ID: ${{ needs.activation.outputs.comment_id }}
           GH_AW_ALLOWED_DOMAINS: "api.business.githubcopilot.com,api.enterprise.githubcopilot.com,api.github.com,api.githubcopilot.com,api.individual.githubcopilot.com,api.snapcraft.io,archive.ubuntu.com,azure.archive.ubuntu.com,crl.geotrust.com,crl.globalsign.com,crl.identrust.com,crl.sectigo.com,crl.thawte.com,crl.usertrust.com,crl.verisign.com,crl3.digicert.com,crl4.digicert.com,crls.ssl.com,github.com,host.docker.internal,json-schema.org,json.schemastore.org,keyserver.ubuntu.com,ocsp.digicert.com,ocsp.geotrust.com,ocsp.globalsign.com,ocsp.identrust.com,ocsp.sectigo.com,ocsp.ssl.com,ocsp.thawte.com,ocsp.usertrust.com,ocsp.verisign.com,packagecloud.io,packages.cloud.google.com,packages.microsoft.com,ppa.launchpad.net,raw.githubusercontent.com,registry.npmjs.org,s.symcb.com,s.symcd.com,security.ubuntu.com,telemetry.enterprise.githubcopilot.com,ts-crl.ws.symantec.com,ts-ocsp.ws.symantec.com,www.googleapis.com"
